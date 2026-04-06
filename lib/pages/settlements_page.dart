@@ -21,7 +21,7 @@ class SettlementsPage extends StatelessWidget {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: StreamBuilder<List<GroupModel>>(
-        stream: provider.firestoreService.getGroupsStream(),
+        stream: provider.firestoreService.getMyGroupsStream(provider.currentUid),
         builder: (context, groupSnapshot) {
           final groups = groupSnapshot.data ?? [];
 
@@ -165,8 +165,8 @@ class _GroupSettlementCard extends StatelessWidget {
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: _DebtArrow(
-                        from: txn['from'],
-                        to: txn['to'],
+                        from: provider.resolveUserName(txn['from']),
+                        to: provider.resolveUserName(txn['to']),
                         amount: txn['amount'],
                       ),
                     );
@@ -205,7 +205,7 @@ class _GroupSettlementCard extends StatelessWidget {
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              '${s.from} paid ${s.to} ₹${s.amount.toStringAsFixed(2)}',
+                              '${provider.resolveUserName(s.from)} paid ${provider.resolveUserName(s.to)} ₹${s.amount.toStringAsFixed(2)}',
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
                           ),

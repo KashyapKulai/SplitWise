@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 import '../models/group_model.dart';
 import '../models/expense_model.dart';
 import '../models/settlement_model.dart';
+import '../models/user_model.dart';
 
 /// Central Firestore service handling all database operations
 class FirestoreService {
@@ -10,20 +11,66 @@ class FirestoreService {
   static const _uuid = Uuid();
 
   // ══════════════════════════════════════════════
+  // USER OPERATIONS
+  // ══════════════════════════════════════════════
+
+  /// Search for a registered user by email (exact match)
+  Future<UserModel?> searchUserByEmail(String email) async {
+    final query = await _db
+        .collection('users')
+        .where('email', isEqualTo: email.toLowerCase().trim())
+        .limit(1)
+        .get();
+    if (query.docs.isEmpty) return null;
+    return UserModel.fromFirestore(query.docs.first);
+  }
+
+  /// Get multiple users by their UIDs
+  Future<Map<String, UserModel>> getUsersByIds(List<String> uids) async {
+    if (uids.isEmpty) return {};
+
+    final result = <String, UserModel>{};
+
+    // Firestore whereIn supports max 30 items at a time
+    for (var i = 0; i < uids.length; i += 30) {
+      final batch = uids.sublist(
+        i,
+        i + 30 > uids.length ? uids.length : i + 30,
+      );
+      final query = await _db
+          .collection('users')
+          .where(FieldPath.documentId, whereIn: batch)
+          .get();
+      for (final doc in query.docs) {
+        result[doc.id] = UserModel.fromFirestore(doc);
+      }
+    }
+
+    return result;
+  }
+
+  /// Get a single user by UID
+  Future<UserModel?> getUserById(String uid) async {
+    final doc = await _db.collection('users').doc(uid).get();
+    if (!doc.exists) return null;
+    return UserModel.fromFirestore(doc);
+  }
+
+  // ══════════════════════════════════════════════
   // GROUP OPERATIONS
   // ══════════════════════════════════════════════
 
-  /// Create a new expense-sharing group
+  /// Create a new expense-sharing group (members are UIDs)
   Future<String> createGroup({
     required String name,
-    required List<String> members,
+    required List<String> memberUids,
     String icon = '👥',
   }) async {
     final docRef = _db.collection('groups').doc();
     final group = GroupModel(
       id: docRef.id,
       name: name,
-      members: members,
+      members: memberUids,
       createdAt: DateTime.now(),
       icon: icon,
     );
@@ -39,6 +86,30 @@ class FirestoreService {
         .snapshots()
         .map((snapshot) =>
             snapshot.docs.map((doc) => GroupModel.fromFirestore(doc)).toList());
+  }
+
+  /// Real-time stream of groups the user belongs to
+  /// NOTE: No orderBy here — arrayContains + orderBy requires a composite index.
+  /// We sort client-side instead.
+  Stream<List<GroupModel>> getMyGroupsStream(String uid) {
+    return _db
+        .collection('groups')
+        .where('members', arrayContains: uid)
+        .snapshots()
+        .map((snapshot) {
+      final groups =
+          snapshot.docs.map((doc) => GroupModel.fromFirestore(doc)).toList();
+      groups.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      return groups;
+    });
+  }
+
+  /// Real-time stream of a single group by ID
+  Stream<GroupModel?> getGroupStream(String groupId) {
+    return _db.collection('groups').doc(groupId).snapshots().map((doc) {
+      if (!doc.exists) return null;
+      return GroupModel.fromFirestore(doc);
+    });
   }
 
   /// Delete a group and all its associated expenses and settlements
@@ -69,13 +140,13 @@ class FirestoreService {
   // EXPENSE OPERATIONS
   // ══════════════════════════════════════════════
 
-  /// Add a new expense to a group
+  /// Add a new expense to a group (paidBy and participants are UIDs)
   Future<void> addExpense({
     required String groupId,
     required String title,
     required double amount,
-    required String paidBy,
-    required List<String> participants,
+    required String paidByUid,
+    required List<String> participantUids,
     String splitType = 'equal',
     Map<String, double>? customSplits,
     String category = 'Other',
@@ -86,8 +157,8 @@ class FirestoreService {
       splits = customSplits;
     } else {
       // Equal split among all participants
-      final perPerson = amount / participants.length;
-      splits = {for (var p in participants) p: perPerson};
+      final perPerson = amount / participantUids.length;
+      splits = {for (var uid in participantUids) uid: perPerson};
     }
 
     final expense = ExpenseModel(
@@ -95,8 +166,8 @@ class FirestoreService {
       groupId: groupId,
       title: title,
       amount: amount,
-      paidBy: paidBy,
-      participants: participants,
+      paidBy: paidByUid,
+      participants: participantUids,
       splitType: splitType,
       splits: splits,
       category: category,
@@ -111,11 +182,14 @@ class FirestoreService {
     return _db
         .collection('expenses')
         .where('groupId', isEqualTo: groupId)
-        .orderBy('createdAt', descending: true)
         .snapshots()
-        .map((snapshot) => snapshot.docs
-            .map((doc) => ExpenseModel.fromFirestore(doc))
-            .toList());
+        .map((snapshot) {
+      final expenses = snapshot.docs
+          .map((doc) => ExpenseModel.fromFirestore(doc))
+          .toList();
+      expenses.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      return expenses;
+    });
   }
 
   /// Real-time stream of ALL expenses (for dashboard)
@@ -158,8 +232,6 @@ class FirestoreService {
   }
 
   /// Real-time stream of net balances for a group.
-  /// This is the key method for real-time updates — it derives balances
-  /// from the expenses stream so any add/delete/settle updates immediately.
   Stream<Map<String, double>> calculateBalancesStream(String groupId) {
     return _db
         .collection('expenses')
@@ -198,42 +270,14 @@ class FirestoreService {
   // MEMBER OPERATIONS
   // ══════════════════════════════════════════════
 
-  /// Add a member (by name) to an existing group
-  Future<void> addMemberToGroup(String groupId, String memberName) async {
+  /// Add a member (by UID) to an existing group
+  Future<void> addMemberToGroup(String groupId, String memberUid) async {
     await _db.collection('groups').doc(groupId).update({
-      'members': FieldValue.arrayUnion([memberName]),
+      'members': FieldValue.arrayUnion([memberUid]),
     });
-  }
-
-  /// Invite a member by email — stores name + email in the group
-  Future<void> inviteMemberByEmail(
-      String groupId, String name, String email) async {
-    // Add to members list
-    await _db.collection('groups').doc(groupId).update({
-      'members': FieldValue.arrayUnion([name]),
-      'memberEmails.$name': email,
-    });
-  }
-
-  /// Get member emails for a group
-  Future<Map<String, String>> getMemberEmails(String groupId) async {
-    final doc = await _db.collection('groups').doc(groupId).get();
-    final data = doc.data();
-    if (data == null || data['memberEmails'] == null) return {};
-    return Map<String, String>.from(data['memberEmails']);
   }
 
   /// Debt Simplification Algorithm (Greedy approach)
-  ///
-  /// Minimizes the number of transactions needed to settle all debts.
-  ///
-  /// Algorithm:
-  /// 1. Compute net balance for each person
-  /// 2. Separate into creditors (+balance) and debtors (-balance)
-  /// 3. Sort both lists by absolute value (descending)
-  /// 4. Match largest creditor with largest debtor
-  /// 5. The smaller amount is settled; the remainder continues
-  /// 6. Repeat until all settled
   List<Map<String, dynamic>> simplifyDebts(Map<String, double> balances) {
     // Filter out zero balances (tolerance for floating-point)
     final creditors = <MapEntry<String, double>>[]; // positive balance
@@ -280,7 +324,7 @@ class FirestoreService {
   // SETTLEMENT OPERATIONS
   // ══════════════════════════════════════════════
 
-  /// Settle all debts in a group: writes simplified transactions to Firestore
+  /// Settle all debts in a group
   Future<void> settleDebts(String groupId) async {
     final balances = await calculateBalances(groupId);
     final transactions = simplifyDebts(balances);
@@ -299,7 +343,7 @@ class FirestoreService {
       batch.set(docRef, settlement.toMap());
     }
 
-    // Also delete all expenses in this group (they've been settled)
+    // Delete all expenses in this group (they've been settled)
     final expenses = await _db
         .collection('expenses')
         .where('groupId', isEqualTo: groupId)
@@ -316,11 +360,14 @@ class FirestoreService {
     return _db
         .collection('settlements')
         .where('groupId', isEqualTo: groupId)
-        .orderBy('settledAt', descending: true)
         .snapshots()
-        .map((snapshot) => snapshot.docs
-            .map((doc) => SettlementModel.fromFirestore(doc))
-            .toList());
+        .map((snapshot) {
+      final settlements = snapshot.docs
+          .map((doc) => SettlementModel.fromFirestore(doc))
+          .toList();
+      settlements.sort((a, b) => b.settledAt.compareTo(a.settledAt));
+      return settlements;
+    });
   }
 
   /// Real-time stream of ALL settlements (for activity feed)

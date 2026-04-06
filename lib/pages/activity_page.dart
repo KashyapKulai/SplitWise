@@ -36,23 +36,25 @@ class ActivityPage extends StatelessWidget {
                 items.add(_ActivityItem(
                   type: _ActivityType.expense,
                   title: e.title,
-                  subtitle: 'Paid by ${e.paidBy}',
+                  subtitle: 'Paid by ${provider.resolveUserName(e.paidBy)}',
                   amount: e.amount,
                   category: e.category,
                   timestamp: e.createdAt,
-                  person: e.paidBy,
+                  person: provider.resolveUserName(e.paidBy),
                 ));
               }
 
               for (final s in settlements) {
+                final fromName = provider.resolveUserName(s.from);
+                final toName = provider.resolveUserName(s.to);
                 items.add(_ActivityItem(
                   type: _ActivityType.settlement,
-                  title: '${s.from} → ${s.to}',
+                  title: '$fromName → $toName',
                   subtitle: 'Settlement',
                   amount: s.amount,
                   category: 'Settlement',
                   timestamp: s.settledAt,
-                  person: s.from,
+                  person: fromName,
                 ));
               }
 

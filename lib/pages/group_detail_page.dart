@@ -5,6 +5,7 @@ import '../core/theme.dart';
 import '../core/constants.dart';
 import '../models/group_model.dart';
 import '../models/expense_model.dart';
+import '../models/user_model.dart';
 import '../providers/app_provider.dart';
 import '../widgets/glass_card.dart';
 import '../widgets/avatar_widget.dart';
@@ -21,22 +22,27 @@ class GroupDetailPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final provider = context.watch<AppProvider>();
 
-    return WillPopScope(
-      onWillPop: () async {
-        provider.setActiveGroupId(null);
-        return false;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) provider.setActiveGroupId(null);
       },
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        body: StreamBuilder<List<GroupModel>>(
-          stream: provider.firestoreService.getGroupsStream(),
+        body: StreamBuilder<GroupModel?>(
+          stream: provider.firestoreService.getGroupStream(groupId),
           builder: (context, groupSnapshot) {
-            final groups = groupSnapshot.data ?? [];
-            final group = groups.where((g) => g.id == groupId).firstOrNull;
+            final group = groupSnapshot.data;
 
             if (group == null) {
-              return const Center(child: CircularProgressIndicator());
+              if (groupSnapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              return const Center(child: Text('Group not found'));
             }
+
+            // Cache member user data
+            provider.cacheUsers(group.members);
 
             return StreamBuilder<List<ExpenseModel>>(
               stream: provider.firestoreService.getExpensesStream(groupId),
@@ -67,7 +73,7 @@ class GroupDetailPage extends StatelessWidget {
                                     children: [
                                       _buildBackButton(context, provider),
                                       const SizedBox(width: 16),
-                                      _buildGroupInfo(context, group),
+                                      _buildGroupInfo(context, group, provider),
                                       const Spacer(),
                                       _buildActionButtons(
                                         context,
@@ -85,7 +91,7 @@ class GroupDetailPage extends StatelessWidget {
                                         children: [
                                           _buildBackButton(context, provider),
                                           const SizedBox(width: 12),
-                                          _buildGroupInfo(context, group),
+                                          _buildGroupInfo(context, group, provider),
                                         ],
                                       ),
                                       const SizedBox(height: 16),
@@ -102,7 +108,7 @@ class GroupDetailPage extends StatelessWidget {
                       ),
                     ),
 
-                    // ── Members List (real-time from group stream) ──
+                    // ── Members List ──
                     SliverToBoxAdapter(
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(28, 16, 28, 0),
@@ -149,14 +155,16 @@ class GroupDetailPage extends StatelessWidget {
                               Wrap(
                                 spacing: 10,
                                 runSpacing: 10,
-                                children: group.members.map((member) {
+                                children: group.members.map((uid) {
+                                  final name = provider.resolveUserName(uid);
+                                  final isMe = uid == provider.currentUid;
                                   return Container(
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 12,
                                       vertical: 8,
                                     ),
                                     decoration: BoxDecoration(
-                                      gradient: member == 'You'
+                                      gradient: isMe
                                           ? AppTheme.primaryGradient
                                           : LinearGradient(
                                               colors: [
@@ -169,7 +177,7 @@ class GroupDetailPage extends StatelessWidget {
                                             ),
                                       borderRadius: BorderRadius.circular(20),
                                       border: Border.all(
-                                        color: member == 'You'
+                                        color: isMe
                                             ? AppTheme.primaryPurple
                                             : AppTheme.glassBorder,
                                       ),
@@ -177,15 +185,15 @@ class GroupDetailPage extends StatelessWidget {
                                     child: Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        AvatarWidget(name: member, size: 24),
+                                        AvatarWidget(name: name, size: 24),
                                         const SizedBox(width: 8),
                                         Text(
-                                          member,
+                                          isMe ? '$name (You)' : name,
                                           style: Theme.of(context)
                                               .textTheme
                                               .labelLarge
                                               ?.copyWith(
-                                                color: member == 'You'
+                                                color: isMe
                                                     ? Colors.white
                                                     : null,
                                               ),
@@ -201,7 +209,7 @@ class GroupDetailPage extends StatelessWidget {
                       ),
                     ),
 
-                    // ── Balance Summary (computed from real-time expenses) ──
+                    // ── Balance Summary ──
                     if (balances.isNotEmpty)
                       SliverToBoxAdapter(
                         child: Padding(
@@ -217,18 +225,21 @@ class GroupDetailPage extends StatelessWidget {
                                   ).textTheme.titleMedium,
                                 ),
                                 const SizedBox(height: 16),
-                                ...group.members.map((member) {
-                                  final balance = balances[member] ?? 0;
+                                ...group.members.map((uid) {
+                                  final name = provider.resolveUserName(uid);
+                                  final balance = balances[uid] ?? 0;
                                   final isPositive = balance >= 0;
                                   return Padding(
                                     padding: const EdgeInsets.only(bottom: 10),
                                     child: Row(
                                       children: [
-                                        AvatarWidget(name: member, size: 32),
+                                        AvatarWidget(name: name, size: 32),
                                         const SizedBox(width: 12),
                                         Expanded(
                                           child: Text(
-                                            member,
+                                            uid == provider.currentUid
+                                                ? '$name (You)'
+                                                : name,
                                             style: Theme.of(
                                               context,
                                             ).textTheme.titleMedium,
@@ -257,7 +268,7 @@ class GroupDetailPage extends StatelessWidget {
                         ),
                       ),
 
-                    // ── Simplified Debts (computed from real-time expenses) ──
+                    // ── Simplified Debts ──
                     if (simplified.isNotEmpty)
                       SliverToBoxAdapter(
                         child: Padding(
@@ -284,17 +295,21 @@ class GroupDetailPage extends StatelessWidget {
                                 ),
                                 const SizedBox(height: 16),
                                 ...simplified.map((txn) {
+                                  final fromName =
+                                      provider.resolveUserName(txn['from']);
+                                  final toName =
+                                      provider.resolveUserName(txn['to']);
                                   return Padding(
                                     padding: const EdgeInsets.only(bottom: 12),
                                     child: Row(
                                       children: [
                                         AvatarWidget(
-                                          name: txn['from'],
+                                          name: fromName,
                                           size: 30,
                                         ),
                                         const SizedBox(width: 8),
                                         Text(
-                                          txn['from'],
+                                          fromName,
                                           style: Theme.of(
                                             context,
                                           ).textTheme.bodyLarge,
@@ -359,13 +374,13 @@ class GroupDetailPage extends StatelessWidget {
                                           ),
                                         ),
                                         Text(
-                                          txn['to'],
+                                          toName,
                                           style: Theme.of(
                                             context,
                                           ).textTheme.bodyLarge,
                                         ),
                                         const SizedBox(width: 8),
-                                        AvatarWidget(name: txn['to'], size: 30),
+                                        AvatarWidget(name: toName, size: 30),
                                       ],
                                     ),
                                   );
@@ -403,7 +418,10 @@ class GroupDetailPage extends StatelessWidget {
                             context,
                             index,
                           ) {
-                            return _ExpenseTile(expense: expenses[index]);
+                            return _ExpenseTile(
+                              expense: expenses[index],
+                              provider: provider,
+                            );
                           }, childCount: expenses.length),
                         ),
                       ),
@@ -435,7 +453,10 @@ class GroupDetailPage extends StatelessWidget {
     );
   }
 
-  Widget _buildGroupInfo(BuildContext context, GroupModel group) {
+  Widget _buildGroupInfo(BuildContext context, GroupModel group, AppProvider provider) {
+    final memberNames = group.members
+        .map((uid) => provider.resolveUserName(uid))
+        .toList();
     return Expanded(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -467,7 +488,7 @@ class GroupDetailPage extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          AvatarStack(names: group.members, size: 26),
+          AvatarStack(names: memberNames, size: 26),
         ],
       ),
     );
@@ -553,7 +574,7 @@ class GroupDetailPage extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// Invite Member Dialog
+// Invite Member Dialog — email search only
 // ─────────────────────────────────────────────
 class _InviteMemberDialog extends StatefulWidget {
   final String groupId;
@@ -565,47 +586,56 @@ class _InviteMemberDialog extends StatefulWidget {
 }
 
 class _InviteMemberDialogState extends State<_InviteMemberDialog> {
-  final _nameController = TextEditingController();
   final _emailController = TextEditingController();
-  bool _isInviting = false;
+  bool _isSearching = false;
+  String? _error;
+  UserModel? _searchResult;
   String? _successMessage;
 
   @override
   void dispose() {
-    _nameController.dispose();
     _emailController.dispose();
     super.dispose();
   }
 
-  Future<void> _inviteMember() async {
-    final name = _nameController.text.trim();
+  Future<void> _searchAndInvite() async {
     final email = _emailController.text.trim();
-    if (name.isEmpty) return;
+    if (email.isEmpty) return;
 
-    setState(() => _isInviting = true);
+    setState(() {
+      _isSearching = true;
+      _error = null;
+      _searchResult = null;
+      _successMessage = null;
+    });
 
-    if (email.isNotEmpty) {
-      await widget.provider.firestoreService.inviteMemberByEmail(
-        widget.groupId,
-        name,
-        email,
-      );
+    final user =
+        await widget.provider.firestoreService.searchUserByEmail(email);
+
+    if (user == null) {
+      setState(() {
+        _isSearching = false;
+        _error = 'No account found with this email';
+      });
     } else {
-      await widget.provider.firestoreService.addMemberToGroup(
-        widget.groupId,
-        name,
-      );
+      setState(() {
+        _isSearching = false;
+        _searchResult = user;
+      });
     }
+  }
+
+  Future<void> _addMember(UserModel user) async {
+    await widget.provider.firestoreService
+        .addMemberToGroup(widget.groupId, user.uid);
+    await widget.provider.cacheUsers([user.uid]);
 
     if (mounted) {
       setState(() {
-        _isInviting = false;
-        _successMessage = '$name has been added!';
-        _nameController.clear();
+        _successMessage = '${user.displayName} has been added!';
+        _searchResult = null;
         _emailController.clear();
       });
-
-      // Auto-clear success message after 2 seconds
       Future.delayed(const Duration(seconds: 2), () {
         if (mounted) setState(() => _successMessage = null);
       });
@@ -655,31 +685,99 @@ class _InviteMemberDialogState extends State<_InviteMemberDialog> {
               const SizedBox(height: 24),
 
               TextField(
-                controller: _nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Name *',
-                  hintText: 'e.g. John Doe',
-                  prefixIcon: Icon(Icons.person_outline_rounded),
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              TextField(
                 controller: _emailController,
                 keyboardType: TextInputType.emailAddress,
+                onSubmitted: (_) => _searchAndInvite(),
                 decoration: const InputDecoration(
-                  labelText: 'Email (optional)',
-                  hintText: 'e.g. john@example.com',
+                  labelText: 'Email address',
+                  hintText: 'friend@example.com',
                   prefixIcon: Icon(Icons.email_outlined),
                 ),
               ),
               const SizedBox(height: 8),
 
               Text(
-                'The member will be added to this group immediately.',
+                'Search for a registered user by email to add them.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
 
+              // Error
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppTheme.error.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: AppTheme.error.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.error_outline_rounded,
+                          color: AppTheme.error, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _error!,
+                          style: TextStyle(
+                            color: AppTheme.error,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              // Search result
+              if (_searchResult != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppTheme.success.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: AppTheme.success.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      AvatarWidget(
+                          name: _searchResult!.displayName, size: 36),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(_searchResult!.displayName,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w600)),
+                            Text(_searchResult!.email,
+                                style: Theme.of(context).textTheme.bodySmall),
+                          ],
+                        ),
+                      ),
+                      FilledButton.icon(
+                        onPressed: () => _addMember(_searchResult!),
+                        icon: const Icon(Icons.add_rounded, size: 16),
+                        label: const Text('Add'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppTheme.success,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              // Success message
               if (_successMessage != null) ...[
                 const SizedBox(height: 12),
                 Container(
@@ -725,15 +823,15 @@ class _InviteMemberDialogState extends State<_InviteMemberDialog> {
                   ),
                   const SizedBox(width: 12),
                   FilledButton.icon(
-                    onPressed: _isInviting ? null : _inviteMember,
-                    icon: _isInviting
+                    onPressed: _isSearching ? null : _searchAndInvite,
+                    icon: _isSearching
                         ? const SizedBox(
                             width: 18,
                             height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(Icons.send_rounded, size: 18),
-                    label: const Text('Add Member'),
+                        : const Icon(Icons.search_rounded, size: 18),
+                    label: const Text('Search'),
                   ),
                 ],
               ),
@@ -746,11 +844,12 @@ class _InviteMemberDialogState extends State<_InviteMemberDialog> {
 }
 
 // ─────────────────────────────────────────────
-// Expense Tile
+// Expense Tile (resolves UIDs to names)
 // ─────────────────────────────────────────────
 class _ExpenseTile extends StatelessWidget {
   final ExpenseModel expense;
-  const _ExpenseTile({required this.expense});
+  final AppProvider provider;
+  const _ExpenseTile({required this.expense, required this.provider});
 
   @override
   Widget build(BuildContext context) {
@@ -758,6 +857,7 @@ class _ExpenseTile extends StatelessWidget {
     final color = Color(info['color'] as int);
     final icon = info['icon'] as IconData;
     final dateStr = DateFormat('MMM d, h:mm a').format(expense.createdAt);
+    final paidByName = provider.resolveUserName(expense.paidBy);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -785,7 +885,7 @@ class _ExpenseTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'Paid by ${expense.paidBy} · $dateStr',
+                    'Paid by $paidByName · $dateStr',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -811,7 +911,7 @@ class _ExpenseTile extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// Add Expense FAB + Dialog
+// Add Expense FAB + Dialog (UID-based)
 // ─────────────────────────────────────────────
 class _AddExpenseFAB extends StatelessWidget {
   final String groupId;
@@ -860,9 +960,9 @@ class _AddExpenseDialogState extends State<_AddExpenseDialog> {
   final _amountController = TextEditingController();
   String _selectedCategory = 'Other';
   String _splitType = 'equal';
-  String? _paidBy;
-  List<String> _participants = [];
-  List<String> _groupMembers = [];
+  String? _paidByUid;
+  List<String> _participantUids = [];
+  List<String> _groupMemberUids = [];
   bool _isAdding = false;
 
   @override
@@ -872,14 +972,16 @@ class _AddExpenseDialogState extends State<_AddExpenseDialog> {
   }
 
   Future<void> _loadGroupMembers() async {
-    // Use real-time stream to get the latest members
-    widget.provider.firestoreService.getGroupsStream().first.then((groups) {
+    widget.provider.firestoreService
+        .getMyGroupsStream(widget.provider.currentUid)
+        .first
+        .then((groups) {
       final group = groups.where((g) => g.id == widget.groupId).firstOrNull;
       if (group != null && mounted) {
         setState(() {
-          _groupMembers = group.members;
-          _participants = List.from(group.members);
-          _paidBy = widget.provider.currentUser;
+          _groupMemberUids = group.members;
+          _participantUids = List.from(group.members);
+          _paidByUid = widget.provider.currentUid;
         });
       }
     });
@@ -897,9 +999,8 @@ class _AddExpenseDialogState extends State<_AddExpenseDialog> {
     final amountStr = _amountController.text.trim();
     if (title.isEmpty ||
         amountStr.isEmpty ||
-        _paidBy == null ||
-        _participants.isEmpty)
-      return;
+        _paidByUid == null ||
+        _participantUids.isEmpty) return;
 
     final amount = double.tryParse(amountStr);
     if (amount == null || amount <= 0) return;
@@ -909,8 +1010,8 @@ class _AddExpenseDialogState extends State<_AddExpenseDialog> {
       groupId: widget.groupId,
       title: title,
       amount: amount,
-      paidBy: _paidBy!,
-      participants: _participants,
+      paidByUid: _paidByUid!,
+      participantUids: _participantUids,
       splitType: _splitType,
       category: _selectedCategory,
     );
@@ -961,7 +1062,8 @@ class _AddExpenseDialogState extends State<_AddExpenseDialog> {
                 ),
                 const SizedBox(height: 16),
 
-                Text('Category', style: Theme.of(context).textTheme.labelLarge),
+                Text('Category',
+                    style: Theme.of(context).textTheme.labelLarge),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
@@ -977,29 +1079,30 @@ class _AddExpenseDialogState extends State<_AddExpenseDialog> {
                 ),
                 const SizedBox(height: 16),
 
-                if (_groupMembers.isNotEmpty) ...[
-                  Text(
-                    'Paid by',
-                    style: Theme.of(context).textTheme.labelLarge,
-                  ),
+                if (_groupMemberUids.isNotEmpty) ...[
+                  Text('Paid by',
+                      style: Theme.of(context).textTheme.labelLarge),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
-                    value: _paidBy,
-                    items: _groupMembers
+                    value: _paidByUid,
+                    items: _groupMemberUids
                         .map(
-                          (m) => DropdownMenuItem(
-                            value: m,
+                          (uid) => DropdownMenuItem(
+                            value: uid,
                             child: Row(
                               children: [
-                                AvatarWidget(name: m, size: 22),
+                                AvatarWidget(
+                                    name: widget.provider
+                                        .resolveUserName(uid),
+                                    size: 22),
                                 const SizedBox(width: 8),
-                                Text(m),
+                                Text(widget.provider.resolveUserName(uid)),
                               ],
                             ),
                           ),
                         )
                         .toList(),
-                    onChanged: (v) => setState(() => _paidBy = v),
+                    onChanged: (v) => setState(() => _paidByUid = v),
                     decoration: const InputDecoration(
                       contentPadding: EdgeInsets.symmetric(
                         horizontal: 12,
@@ -1010,10 +1113,8 @@ class _AddExpenseDialogState extends State<_AddExpenseDialog> {
                   const SizedBox(height: 16),
                 ],
 
-                Text(
-                  'Split Type',
-                  style: Theme.of(context).textTheme.labelLarge,
-                ),
+                Text('Split Type',
+                    style: Theme.of(context).textTheme.labelLarge),
                 const SizedBox(height: 8),
                 Row(
                   children: [
@@ -1032,26 +1133,25 @@ class _AddExpenseDialogState extends State<_AddExpenseDialog> {
                 ),
                 const SizedBox(height: 16),
 
-                Text(
-                  'Participants',
-                  style: Theme.of(context).textTheme.labelLarge,
-                ),
+                Text('Participants',
+                    style: Theme.of(context).textTheme.labelLarge),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children: _groupMembers.map((member) {
-                    final selected = _participants.contains(member);
+                  children: _groupMemberUids.map((uid) {
+                    final name = widget.provider.resolveUserName(uid);
+                    final selected = _participantUids.contains(uid);
                     return FilterChip(
-                      avatar: AvatarWidget(name: member, size: 22),
-                      label: Text(member),
+                      avatar: AvatarWidget(name: name, size: 22),
+                      label: Text(name),
                       selected: selected,
                       onSelected: (val) {
                         setState(() {
                           if (val) {
-                            _participants.add(member);
+                            _participantUids.add(uid);
                           } else {
-                            _participants.remove(member);
+                            _participantUids.remove(uid);
                           }
                         });
                       },
@@ -1074,7 +1174,8 @@ class _AddExpenseDialogState extends State<_AddExpenseDialog> {
                           ? const SizedBox(
                               width: 18,
                               height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.check_rounded, size: 18),
                       label: const Text('Add'),

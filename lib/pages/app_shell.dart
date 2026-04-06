@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../core/theme.dart';
 import '../providers/app_provider.dart';
+import '../widgets/avatar_widget.dart';
 import 'dashboard_page.dart';
 import 'groups_page.dart';
 import 'settlements_page.dart';
 import 'activity_page.dart';
+import 'profile_page.dart';
 import 'group_detail_page.dart';
 
 /// Main app shell with responsive sidebar/bottom navigation
@@ -17,6 +19,7 @@ class AppShell extends StatelessWidget {
     _NavItem(Icons.group_rounded, 'Groups'),
     _NavItem(Icons.account_balance_wallet_rounded, 'Settle'),
     _NavItem(Icons.timeline_rounded, 'Activity'),
+    _NavItem(Icons.person_rounded, 'Profile'),
   ];
 
   @override
@@ -122,6 +125,55 @@ class AppShell extends StatelessWidget {
             ),
           ),
 
+          // ── User Info ──
+          if (expanded)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.03)
+                      : Colors.black.withValues(alpha: 0.02),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    AvatarWidget(name: provider.currentUser, size: 30),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            provider.currentUser,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            provider.authService.email,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withValues(alpha: 0.5),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
           const SizedBox(height: 8),
 
           // ── Nav Items ──
@@ -199,6 +251,8 @@ class AppShell extends StatelessWidget {
         return const SettlementsPage(key: ValueKey('settlements'));
       case 3:
         return const ActivityPage(key: ValueKey('activity'));
+      case 4:
+        return const ProfilePage(key: ValueKey('profile'));
       default:
         return const DashboardPage(key: ValueKey('dashboard'));
     }

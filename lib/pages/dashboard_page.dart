@@ -28,23 +28,23 @@ class DashboardPage extends StatelessWidget {
         stream: provider.firestoreService.getAllExpensesStream(),
         builder: (context, snapshot) {
           final expenses = snapshot.data ?? [];
-          final currentUser = provider.currentUser;
+          final currentUid = provider.currentUid;
 
-          // Calculate balances
+          // Calculate balances using UID
           double youOwe = 0;
           double youAreOwed = 0;
 
           for (final expense in expenses) {
-            if (expense.paidBy == currentUser) {
+            if (expense.paidBy == currentUid) {
               // You paid, others owe you
-              expense.splits.forEach((person, amount) {
-                if (person != currentUser) {
+              expense.splits.forEach((uid, amount) {
+                if (uid != currentUid) {
                   youAreOwed += amount;
                 }
               });
-            } else if (expense.splits.containsKey(currentUser)) {
+            } else if (expense.splits.containsKey(currentUid)) {
               // Someone else paid, you owe them
-              youOwe += expense.splits[currentUser] ?? 0;
+              youOwe += expense.splits[currentUid] ?? 0;
             }
           }
 
@@ -376,10 +376,12 @@ class _TransactionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final provider = context.read<AppProvider>();
     final info = AppConstants.getCategoryInfo(expense.category);
     final color = Color(info['color'] as int);
     final icon = info['icon'] as IconData;
     final dateStr = DateFormat('MMM d, h:mm a').format(expense.createdAt);
+    final paidByName = provider.resolveUserName(expense.paidBy);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -408,7 +410,7 @@ class _TransactionTile extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  'Paid by ${expense.paidBy} · $dateStr',
+                  'Paid by $paidByName · $dateStr',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],

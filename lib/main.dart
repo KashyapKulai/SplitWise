@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
 import 'firebase_options.dart';
 import 'core/theme.dart';
 import 'providers/app_provider.dart';
 import 'pages/app_shell.dart';
+import 'pages/auth_page.dart';
+import 'pages/splash_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -29,7 +32,21 @@ class ClearLedgerApp extends StatelessWidget {
             themeMode: appProvider.themeMode,
             theme: AppTheme.lightTheme,
             darkTheme: AppTheme.darkTheme,
-            home: const AppShell(),
+            home: StreamBuilder<User?>(
+              stream: FirebaseAuth.instance.authStateChanges(),
+              builder: (context, snapshot) {
+                // Still loading auth state
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const SplashPage();
+                }
+                // User is signed in → show app
+                if (snapshot.hasData) {
+                  return const AppShell();
+                }
+                // Not signed in → show auth
+                return const AuthPage();
+              },
+            ),
           );
         },
       ),
