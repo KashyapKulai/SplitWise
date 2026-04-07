@@ -1,0 +1,36 @@
+name: Deploy to Firebase Hosting on merge
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ✅ Install Flutter
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 'stable'
+
+      # ✅ Get dependencies
+      - name: Install dependencies
+        run: flutter pub get
+
+      # ✅ Build web app
+      - name: Build Flutter Web
+        run: flutter build web
+
+      # ✅ Deploy to Firebase
+      - name: Deploy to Firebase
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_AUTH_EF804 }}
+          channelId: live
+          projectId: auth-ef804
