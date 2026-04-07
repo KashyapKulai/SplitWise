@@ -12,21 +12,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ✅ Install Flutter
+      # ✅ FIXED Flutter setup
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 'stable'
+          channel: stable
+          flutter-version: 3.22.0   # 🔥 IMPORTANT (fixed version)
 
-      # ✅ Get dependencies
       - name: Install dependencies
         run: flutter pub get
 
-      # ✅ Build web app
       - name: Build Flutter Web
         run: flutter build web
 
-      # ✅ Deploy to Firebase
       - name: Deploy to Firebase
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
