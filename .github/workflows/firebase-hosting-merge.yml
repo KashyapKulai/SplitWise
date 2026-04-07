@@ -12,18 +12,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.29.0
+      # ✅ Install Flutter manually (LATEST)
+      - name: Install Flutter
+        run: |
+          git clone https://github.com/flutter/flutter.git -b stable --depth 1
+          echo "$PWD/flutter/bin" >> $GITHUB_PATH
 
+      # ✅ Verify version (important)
+      - name: Check Flutter version
+        run: flutter --version
+
+      # ✅ Install dependencies
       - name: Install dependencies
         run: flutter pub get
 
+      # ✅ Build app
       - name: Build Flutter Web
         run: flutter build web
 
+      # ✅ Deploy
       - name: Deploy to Firebase
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
